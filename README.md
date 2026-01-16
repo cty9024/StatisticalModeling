@@ -2,7 +2,7 @@
 
 **Course:** STAT 425 – Statistical Modeling I  
 **Instructor:** Douglas Simpson  
-**Semester:** Fall 2025 
+**Semester:** Fall 2025  
 **Author:** Ting Yun Chen (tingyun3)  
 
 ---
@@ -46,9 +46,9 @@ Models and analyses implemented in R include:
 - `figures/`: Generated plots (if applicable)
 
 ## Tools and Technologies
-**Programming Language:** R
-**Libraries:** tidyverse, car, splines, glmnet, lme4, broom, doParallel
-**Reporting:** Quarto
+Programming Language: R   
+Libraries: tidyverse, car, splines, glmnet, lme4, broom, doParallel   
+Reporting: Quarto   
 
 ## Notes
 This repository documents the final project only. Course homework assignments are not included.
