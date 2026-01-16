@@ -6,7 +6,7 @@ The data contain flights between major Indian metropolitan cities and are common
 prediction tasks.
 
 ## File
-- `Clean_Dataset.csv`
+`Clean_Dataset.csv`
 
 ## Observations and Cleaning
 The cleaned dataset used in the analysis contains 300,153 rows and 11 variables.
