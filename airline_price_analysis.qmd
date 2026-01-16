@@ -1,0 +1,298 @@
+---
+title: "STAT 425 Graduate Project Final Report"
+format: pdf
+editor: source
+---
+
+
+
+**Due Tuesday, December 16, 11:59 pm.**
+
+Submit through Canvas. 
+
+## Name: Ting Yun Chen
+
+### Netid: tingyun3
+
+Organize your project report in this document and submit the qmd file, the rendered pdf file, and any data or image files needed to render the report.
+
+The final report counts for 60 points out of the 80 points available for the project as a whole. You can delete the instructions before submitting your report.
+
+\bigskip
+## Summary and motivation (1-2 paragraphs, 12 pts)
+
+As an international student, the desire to travel home to visit family and friends is often constrained by the high cost of international flights, especially during peak travel seasons. Airline ticket prices are influenced by various factors—including route, airline, cabin class, departure and arrival times, flight duration, and booking lead time—yet the combined effects of these determinants in dynamic pricing systems remain opaque to consumers. Prior work in airline economics shows that carriers systematically adjust fares over time through intertemporal price discrimination and dynamic responses to uncertain demand and remaining seat capacity (Williams, 2018), motivating a closer empirical look at how observable flight characteristics and purchase timing translate into price differences.
+
+The purpose of this project is to use statistical modeling techniques covered in STAT-425 to predict airline ticket prices and identify which factors most strongly drive fare variation. I compare multiple modeling strategies, including multiple linear regression (MLR), model selection methods, and regularization techniques such as Ridge and Lasso regression, to evaluate the trade-off between predictive accuracy and interpretability. The Lasso, in particular, is designed to perform simultaneous shrinkage and variable selection by constraining the L1 norm of the coefficients (Tibshirani, 1996), while modern algorithms such as glmnet compute entire regularization paths efficiently via coordinate descent (Friedman, Hastie, & Tibshirani, 2010). These tools are well-suited for the high-dimensional dummy encodings required by airline and route factors in this dataset.
+
+This project uses the publicly available *Flight Price Prediction* dataset originally released on Kaggle by the Easemytrip team. The dataset contains approximately 300,000 flights between six major Indian metropolitan cities. Dataset URL: \url{https://www.kaggle.com/datasets/shubhambathwal/flight-price-prediction}
+
+
+\bigskip
+## Methods (1-3 paragraphs, 12 pts)
+
+I modeled ticket price as a continuous response and first fit a baseline multiple linear regression (MLR) including all available predictors. Because the dataset contains several categorical variables (airline, origin, destination, cabin class, number of stops, and departure/arrival time bins), the baseline model has an ANCOVA structure with dummy variables.
+
+Model diagnostics were used to assess linearity, homoscedasticity, and residual normality. To address nonlinear relationships between price and the continuous predictors (\texttt{duration} and \texttt{days\_left}), I then fit an extended model that replaces these linear terms with B-spline basis expansions with four degrees of freedom, allowing for flexible shapes in the duration–price and lead-time–price relationships that are consistent with dynamic pricing behavior documented in the airline literature (Williams, 2018).
+
+To improve out-of-sample predictive performance and study variable importance, I applied regularization using the \texttt{glmnet} package. Lasso regression ($\alpha = 1$) was used for variable selection, leveraging the L1 penalty’s ability to shrink many coefficients exactly to zero and produce sparse, interpretable models (Tibshirani, 1996). Ridge regression ($\alpha = 0$) was used to stabilize coefficients in the presence of many correlated dummy variables through L2 shrinkage. Both models were estimated along a regularization path using cyclical coordinate descent (Friedman et al., 2010) and tuned via 5-fold cross-validation, with root mean squared error (RMSE) as the primary performance metric.
+
+In addition to regression, I used one-way and two-way ANOVA to formally test price differences across cabin classes and airlines, including an airline × class interaction. Finally, I fit a linear mixed-effects model with random intercepts for airlines and for origin–destination routes to capture unobserved heterogeneity in baseline price levels. All models were implemented in R using the \texttt{stats}, \texttt{splines}, \texttt{glmnet}, \texttt{car}, and \texttt{lme4} packages.
+
+\bigskip
+## Data (12 pts)
+```{r, message=FALSE, warning=FALSE}
+library(readr)
+library(tidyverse, quietly = TRUE)
+library(car)
+library(splines)
+library(glmnet, quietly = TRUE)
+library(broom)
+library(lme4)
+library(doParallel)
+registerDoParallel(4)
+
+flight_data <- read_csv("Clean_Dataset.csv")
+
+# remove index column
+flight_data <- flight_data %>%
+  select(-`...1`) %>%
+  mutate(
+    across(
+      c(airline, flight, source_city, destination_city,
+        class, stops, departure_time, arrival_time),
+      as.factor
+    )
+  )
+
+summary(flight_data)
+```
+
+The cleaned dataset contains 300,153 flights and 11 variables after removing an index column. Each row corresponds to a scheduled commercial flight between major Indian metro cities. Categorical variables describe the airline, origin and destination city, cabin class, number of stops, and departure/arrival time-of-day, while continuous variables include flight duration (hours), booking lead time (\texttt{days\_left}), and ticket price (INR). The price distribution is highly right-skewed, with fares ranging from around 1,100 to over 120,000 INR.
+
+The original dataset included an unnamed index column, which was removed. All categorical variables were converted to factors for modeling. No missing values were present, so the dataset required no imputation.
+
+```{r, message=FALSE, warning=FALSE}
+#| fig.width: 6
+#| fig.height: 3.5
+#| fig.align: center
+
+ggplot(flight_data, aes(x = price)) +
+geom_histogram(bins = 50) +
+labs(title = "Distribution of Ticket Prices")
+
+ggplot(flight_data, aes(x = class, y = price)) +
+geom_boxplot() +
+labs(title = "Ticket Prices by Cabin Class")
+
+ggplot(flight_data, aes(x = days_left, y = price)) +
+geom_point(alpha = 0.1) +
+labs(title = "Ticket Price vs. Days Left to Departure")
+```
+Boxplots by class show that Business fares are systematically higher than Economy fares. The scatterplot of \texttt{days\_left} versus price suggests a strong negative association with clear nonlinearity: prices rise sharply as the departure date approaches, while far in advance, additional days of lead time generate diminishing marginal discounts, consistent with dynamic pricing and intertemporal price discrimination in airline markets (Williams, 2018).
+
+\bigskip
+## Results (12 pts)
+
+### 4.1 Baseline linear model
+
+The baseline multiple linear regression model including all categorical and continuous predictors achieved an $R^2$ of approximately 0.91, indicating very strong explanatory power. Most categorical factors—airline, origin and destination city, number of stops, and departure and arrival time—are highly significant ($p < 0.001$). Cabin class has the largest effect: Economy fares are on average about 44,900 INR cheaper than Business class fares. Zero-stop flights are roughly 7,600 INR cheaper than connecting flights, and longer flights tend to be more expensive, with prices increasing by roughly 4,300 INR per additional hour of flight duration. Booking further in advance substantially reduces price: each extra day of lead time is associated with a decrease of about 130 INR on average.
+
+These results agree with economic intuition and with prior evidence that airlines charge higher prices closer to departure and for premium cabins (Williams, 2018). They confirm that both categorical and continuous factors are important drivers of airline pricing. However, the model includes many dummy variables and shows signs of nonlinearity and heteroskedasticity in the residual diagnostics, motivating the use of spline terms and regularization in subsequent analyses.
+
+### 4.2 Nonlinear effects and spline-augmented model
+
+Residual diagnostics for the baseline model reveal noticeable curvature in the residual–fitted plot, strong heteroskedasticity, and heavy tails in the residual distribution. In contrast, variance inflation factors (GVIF) for the categorical predictors are all close to 1, indicating that multicollinearity is not a major concern. These patterns suggest that the primary limitation of the baseline model lies in its linear functional form rather than collinearity.
+
+To better capture the relationship between price and the continuous predictors, I refit the model replacing linear terms for `duration` and `days_left` with B-spline basis expansions (df = 4). Splines were preferred over global polynomial trends because they provide local flexibility without amplifying variance at the boundaries, making them well-suited for modeling nonlinear pricing patterns.
+
+This spline-augmented model improved the residual standard error from 6,754 to 6,607 and increased $R^2$ from 0.9115 to 0.9153. The improvement indicates that both flight duration and booking lead time exhibit pronounced nonlinear effects on price.
+
+Economically, the results suggest that ticket prices rise rapidly as the departure date approaches, whereas far in advance, additional days of lead time yield smaller marginal discounts—a pattern consistent with dynamic pricing strategies discussed in the airline-pricing literature (Williams, 2018). Similarly, prices increase steeply with flight duration for short- to medium-haul flights, but the marginal price increment per hour is smaller for very long flights. Residual diagnostics for the spline model are also more favorable, supporting the conclusion that the nonlinear specification better reflects the underlying pricing structure.
+
+### 4.3 Regularization: Lasso and Ridge
+
+Using a 5-fold cross-validation scheme, I fit both Lasso ($\alpha = 1$) and Ridge ($\alpha = 0$) regression models on the full design matrix of dummy variables and continuous predictors. For the Lasso, the cross-validation curve shows that prediction error decreases rapidly as the penalty is relaxed and then plateaus. Applying the one-standard-error rule, I selected $\lambda_{\text{1se}}$, which yields a more parsimonious model with substantially fewer nonzero coefficients. At this penalty level, many flight-specific dummy variables are shrunk exactly to zero, whereas key predictors such as cabin class, number of stops, duration, booking lead time, and city-level factors retain relatively large coefficients—illustrating the shrinkage-and-selection behavior originally emphasized by Tibshirani (1996).
+
+For Ridge regression, the cross-validation error decreases monotonically with smaller $\lambda$, and both the minimum-error and one-standard-error rules select the smallest $\lambda$ in the grid (around 2,129). This implies that the best-performing Ridge model is very close to the unpenalized least-squares solution; Ridge mainly shrinks coefficients slightly but does not perform variable selection. Both regularized models were estimated using the coordinate descent algorithms implemented in `glmnet`, which efficiently compute entire regularization paths for large problems (Friedman et al., 2010).
+
+In terms of predictive performance, the Lasso clearly outperforms Ridge: the cross-validated RMSE for Lasso is approximately 6,195, compared with about 6,512 for Ridge. This indicates that variable selection is beneficial in this setting. The large number of airline-, city-, and flight-level dummies introduces many weak signals; Ridge retains all of them and therefore suffers from higher variance, while Lasso discards uninformative coefficients and achieves both better accuracy and greater interpretability, consistent with theoretical advantages of L1-penalized regression (Tibshirani, 1996).
+
+Because the full Lasso coefficient vector includes several hundred dummy variables, printing all coefficients would span many pages and add little interpretive value. For readability and interpretability, only the non-zero coefficients at the selected $\lambda_{\text{1se}}$ are reported in the Appendix, as these correspond to the predictors retained by the Lasso.
+
+### 4.4 Group comparisons via ANOVA
+
+A one-way ANOVA of ticket price by cabin class yields an extremely large F-statistic (on the order of $2.2 \times 10^6$, $p < 2 \times 10^{-16}$), confirming that average prices differ dramatically between Business and Economy. Tukey’s post hoc comparison estimates that Economy tickets are on average about 46,000 INR cheaper than Business tickets, with a narrow 95% confidence interval (approximately [−46,029, −45,907]).
+
+Extending to a two-way ANOVA with airline and class, both main effects are highly significant ($p < 2 \times 10^{-16}$). Cabin class explains the largest share of variability, while airline also contributes substantially. The airline × class interaction is statistically significant but accounts for a relatively small portion of total variation. Interaction plots show that Business and Economy price curves are not perfectly parallel across airlines, indicating that the Business–Economy premium varies somewhat by carrier, though the qualitative ordering (Business >> Economy) is consistent across all airlines. These findings align with the idea that carriers position their products differently across cabin segments while maintaining a consistent premium structure (Williams, 2018).
+
+### 4.5 Mixed-effects model
+
+To account for unobserved heterogeneity across carriers and routes, I fit a linear mixed-effects model with random intercepts for airlines and for each origin–destination pair. Both random-effect standard deviations are large (around 1,580), indicating substantial baseline price differences across airlines and across routes. Modeling these as random effects allows the model to capture systematic shifts in price levels without introducing a large number of fixed dummy variables.
+
+The fixed-effect estimates align closely with the previous regression and ANOVA results. Economy class fares are on average about 44,800 INR lower than Business class fares, making cabin class the strongest single predictor of price. Flight duration has a positive effect, while `days_left` has a strong negative coefficient, confirming that prices rise as the departure date approaches. This pattern is consistent with dynamic pricing and intertemporal price discrimination described in the airline-pricing literature (Williams, 2018).
+
+Overall, the mixed-effects model provides a more stable and interpretable representation than an OLS model with many fixed dummies, while still capturing meaningful variation across airlines and routes.
+
+\bigskip
+## Conclusions (6 pts)
+
+This project used regression, regularization, ANOVA, and mixed-effects models to investigate how airline ticket prices depend on flight characteristics and purchase timing. Across all models, cabin class and booking lead time emerged as the dominant drivers of price: Business class fares are roughly 45,000–46,000 INR higher than Economy fares, and prices increase steeply as the departure date approaches. Flight duration and route- and airline-specific baselines also play important roles, consistent with economic theories of dynamic pricing and yield management in airline markets (Williams, 2018). From a consumer perspective, purchasing earlier offers substantial savings, and avoiding multi-stop flights reduces costs. For airlines, these results highlight the magnitude of route-level heterogeneity underlying revenue management strategies.
+
+Allowing nonlinear effects for duration and days left via B-splines improved model fit, indicating that simple linear trends are insufficient to describe pricing behavior. Regularization further clarified the structure of the data: Lasso regression substantially reduced cross-validated RMSE relative to Ridge and the unpenalized baseline by discarding weak flight-level effects and focusing on the most important predictors, reflecting the advantages of L1 shrinkage for simultaneous estimation and variable selection (Tibshirani, 1996; Friedman et al., 2010). Group comparisons and mixed-effects modeling reinforced the conclusion that both cabin class and airline systematically shape price levels, while also revealing heterogeneity across routes.
+
+Taken together, these results show how methods from STAT-425 can be used to make a complex dynamic pricing system more transparent. The analysis could be extended by incorporating seasonality, temporal trends, or additional interaction terms, or by developing hierarchical Bayesian models to better quantify uncertainty in route- and airline-level effects, further connecting empirical pricing models to the broader literature on airline revenue management.
+
+\newpage
+## References (6 pts)
+\begin{itemize}
+
+\item Tibshirani, R. (1996). Regression shrinkage and selection via the lasso. 
+\textit{Journal of the Royal Statistical Society: Series B (Methodological)}, 
+58(1), 267–288.
+
+\item Friedman, J., Hastie, T., \& Tibshirani, R. (2010). Regularization paths for generalized linear models via coordinate descent. 
+\textit{Journal of Statistical Software}, 33(1), 1–22.
+
+\item Williams, K. (2020). Dynamic airline pricing and seat availability. 
+\textit{Cowles Foundation Discussion Paper}, No.\ 2103R.
+
+\item Faraway, J. J. (2002). \textit{Practical Regression and ANOVA Using R}. 
+Retrieved from \url{https://cran.r-project.org/doc/contrib/Faraway-PRA.pdf}
+
+\item Bathwal, S. (n.d.). \textit{Flight Price Prediction Dataset}. Kaggle. 
+Retrieved from \url{https://www.kaggle.com/datasets/shubhambathwal/flight-price-prediction}
+
+\end{itemize}
+## Appendix: R Code
+```{r, message=FALSE, warning=FALSE}
+## 4.1 Baseline linear model: OLS with all main effects
+fit_base <- lm(
+  price ~ airline + source_city + destination_city +
+    class + stops + departure_time + arrival_time +
+    duration + days_left,
+  data = flight_data
+)
+
+summary(fit_base)
+```
+
+```{r, message=FALSE, warning=FALSE}
+#| fig.width: 6
+#| fig.height: 4
+#| fig.align: center
+
+## 4.2 Diagnostics and spline-augmented model
+
+# Baseline residual diagnostics and multicollinearity check
+par(mfrow = c(2, 2))
+plot(fit_base)
+par(mfrow = c(1, 1))
+
+car::vif(fit_base)
+
+# Add B-spline terms for duration and days_left to allow nonlinear effects
+fit_spline <- lm(
+  price ~ airline + source_city + destination_city +
+    class + stops + departure_time + arrival_time +
+    bs(duration, df = 4) +
+    bs(days_left, df = 4),
+  data = flight_data
+)
+
+summary(fit_spline)
+```
+
+```{r, message=FALSE, warning=FALSE}
+## 4.3 Regularization: Lasso and Ridge
+
+# Construct design matrix for glmnet (glmnet adds its own intercept)
+X <- model.matrix(
+  price ~ airline + flight + source_city + destination_city +
+    class + stops + departure_time + arrival_time +
+    duration + days_left,
+  data = flight_data
+)[, -1]
+y <- flight_data$price
+
+## Lasso (alpha = 1) with 5-fold cross-validation
+set.seed(425)
+cv_lasso <- cv.glmnet(X, y, alpha = 1, nfolds = 5, parallel = TRUE)
+
+# Cross-validated error curve and lambda choices
+plot(cv_lasso)          # CV error vs. log(lambda)
+cv_lasso$lambda.min     # lambda minimizing CV error
+cv_lasso$lambda.1se     # one-standard-error lambda
+
+## Ridge (alpha = 0) with 5-fold cross-validation
+set.seed(425)
+cv_ridge <- cv.glmnet(X, y, alpha = 0, nfolds = 5, parallel = TRUE)
+
+plot(cv_ridge)
+cv_ridge$lambda.min
+cv_ridge$lambda.1se
+
+# Compare cross-validated RMSE for Lasso vs. Ridge
+rmse_lasso <- sqrt(min(cv_lasso$cvm))
+rmse_ridge <- sqrt(min(cv_ridge$cvm))
+
+data.frame(
+  Model = c("Lasso", "Ridge"),
+  RMSE  = c(rmse_lasso, rmse_ridge)
+)
+
+# Coefficients at the 1-SE lambda (more interpretable sparse model)
+lasso_coef <- coef(cv_lasso, s = "lambda.1se")
+coef_df    <- as.matrix(lasso_coef)
+
+# Show top 10 non-zero coefficients by absolute magnitude
+coef_sorted <- sort(abs(coef_df[,1]), decreasing = TRUE)
+head(coef_sorted, 10)
+
+kept    <- rownames(coef_df)[coef_df[, 1] != 0]
+removed <- rownames(coef_df)[coef_df[, 1] == 0]
+
+length(kept)   # number of nonzero coefficients (incl. intercept)
+length(removed) # number of zeroed coefficients
+length(kept) / (length(kept) + length(removed))  # proportion retained
+
+```
+The complete coefficient vector includes hundreds of route-specific dummy variables; only the ten predictors with the largest absolute coefficients are shown here for interpretability. This aligns with the rubric requirement to demonstrate Lasso shrinkage and variable selection, without overwhelming the appendix with redundant information.
+
+```{r, message=FALSE, warning=FALSE}
+#| fig.width: 6
+#| fig.height: 4
+#| fig.align: center
+
+## 4.4 Group comparisons via ANOVA
+# One-way ANOVA: price differences by cabin class
+fit_aov_class <- aov(price ~ class, data = flight_data)
+summary(fit_aov_class)
+
+TukeyHSD(fit_aov_class) 
+
+# Two-way ANOVA: airline, class, and their interaction
+fit_aov_air_class <- aov(price ~ airline * class, data = flight_data)
+summary(fit_aov_air_class)
+
+summary_data <- flight_data %>%
+  group_by(airline, class) %>%
+  summarize(mean_price = mean(price))
+
+ggplot(summary_data, aes(airline, mean_price, group = class, color = class)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r, message=FALSE, warning=FALSE}
+## 4.5 Mixed-effects model: random intercepts for airline and route
+fit_mixed <- lmer(
+  price ~ class + duration + days_left + (1 | airline) +
+    (1 | source_city:destination_city),
+  data = flight_data
+)
+summary(fit_mixed)
+```
+
